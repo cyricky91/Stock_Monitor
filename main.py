@@ -20,7 +20,7 @@ chat_id = os.getenv("CHAT_ID")
 send_to_tg = True
 
 # 2. 監控參數
-stock_ids = "OGN, SQFT, 1138.HK, 3625.HK, 3317.HK"
+stock_ids = "OGN, SQFT, TLX, OKLO, MRLN, MP, VST, ACLS, IONQ, FIGR, PLTR, RANI, REPL"
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
