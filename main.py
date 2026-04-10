@@ -20,7 +20,7 @@ chat_id = os.getenv("CHAT_ID")
 send_to_tg = True
 
 # 2. 監控參數
-stock_ids = "1138.HK" 
+stock_ids = "1138" 
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
