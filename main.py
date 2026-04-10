@@ -14,117 +14,110 @@ warnings.filterwarnings("ignore")
 plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
-# 1. 讀取環境變數 (請確保 GitHub Secrets 已設定)
+# 1. 讀取環境變數
 telegram_token = os.getenv("TELEGRAM_TOKEN")
 chat_id = os.getenv("CHAT_ID")
 send_to_tg = True
 
 # 2. 監控參數
-stock_ids = "AAPL, NVDA, TSLA, MSFT, FORM, SKYQ, OGN" # 可自行增減
+stock_ids = "AAPL, NVDA, TSLA, MSFT, FORM, SKYQ, OGN" 
 time_period = "1y"
-volume_threshold = 2.0
+volume_spike_threshold = 2.0
 bins_count = 70
 
 def run_diagnostic():
     tickers = [s.strip().upper() for s in re.split(r'[，,；;\s]+', stock_ids) if s.strip()]
-    print(f"⏰ 啟動策略診斷：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"⏰ 啟動終極診斷：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 下載數據
     all_data = yf.download(tickers, period=time_period, interval="1d", progress=False, auto_adjust=True)
     
     for tk in tickers:
         try:
-            # 數據對齊
             if len(tickers) > 1:
                 df = pd.DataFrame({'Close': all_data['Close'][tk], 'Volume': all_data['Volume'][tk]}).dropna()
             else:
                 df = pd.DataFrame({'Close': all_data['Close'], 'Volume': all_data['Volume']}).dropna()
 
-            if len(df) < 30: continue
+            if len(df) < 35: continue
 
-            # --- A. 技術指標計算 ---
+            # --- A. 技術指標與資金流計算 ---
             # 1. 籌碼重心 (POC)
             prices, vols = df['Close'].values, df['Volume'].values
             hist, bin_edges = np.histogram(prices, bins=bins_count, weights=vols)
             poc_price = ((bin_edges[:-1] + bin_edges[1:]) / 2)[np.argmax(hist)]
 
-            # 2. RSI (14)
-            delta = df['Close'].diff()
+            # 2. 累計資金流 (Cumulative Money Flow)
+            df['Price_Chg'] = df['Close'].diff()
+            df['MF'] = np.where(df['Price_Chg'] > 0, df['Volume'], np.where(df['Price_Chg'] < 0, -df['Volume'], 0))
+            df['Cum_MF'] = df['MF'].cumsum()
+
+            # 3. RSI & 布林通道
+            delta = df['Price_Chg']
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-            cur_rsi = df['RSI'].iloc[-1]
-
-            # 3. 布林通道 (20, 2)
+            
             df['MA20'] = df['Close'].rolling(window=20).mean()
             df['STD'] = df['Close'].rolling(window=20).std()
             df['Upper'] = df['MA20'] + (df['STD'] * 2)
             df['Lower'] = df['MA20'] - (df['STD'] * 2)
-            up_band, lo_band = df['Upper'].iloc[-1], df['Lower'].iloc[-1]
 
-            # --- B. 智能策略判定 ---
+            # --- B. 主力行為與策略判定 ---
             latest_p = df['Close'].iloc[-1]
             pct_chg = ((latest_p / df['Close'].iloc[-2]) - 1) * 100
             vol_ratio = df['Volume'].iloc[-1] / df['Volume'].tail(20).mean()
+            cur_rsi = df['RSI'].iloc[-1]
             
-            # 核心邏輯
-            advice = "🔘 觀望：等待訊號"
-            signal_color = "⚪"
+            # 判定主力行為
+            main_action = "🔘 籌碼縮量整理"
+            if vol_ratio >= volume_spike_threshold:
+                if pct_chg > 1.8: main_action = "🔥 主力放量進場 (強烈看漲)"
+                elif pct_chg < -1.8: main_action = "😱 主力放量派發 (高度戒備)"
             
+            # 策略建議
+            advice = "等待訊號"
             if latest_p > poc_price:
-                if cur_rsi > 70:
-                    advice = "⚠️ 超買提示：接近頂部，建議逢高分批減磅"; signal_color = "🟡"
-                elif latest_p > up_band:
-                    advice = "🚀 強勢突破：突破布林上軌，持股待漲但勿追高"; signal_color = "🟢"
-                else:
-                    advice = "✅ 多頭佔優：現價高於成本重心，回調至 POC 可加倉"; signal_color = "🟢"
+                advice = "✅ 多頭強勢，回調 POC 支撐可佈局" if cur_rsi < 70 else "⚠️ 超買警告，建議獲利了結"
             else:
-                if cur_rsi < 30:
-                    advice = "🔥 底部機會：嚴重超賣 + 跌破下軌，隨時反彈"; signal_color = "🔵"
-                elif latest_p < lo_band:
-                    advice = "😱 恐慌殺跌：股價跌穿布林下軌，暫避風頭"; signal_color = "🔴"
-                else:
-                    advice = "📉 弱勢整理：受壓於成本重心，暫不宜進場"; signal_color = "🔴"
+                advice = "🔵 超跌機會，觀察反彈" if cur_rsi < 30 else "📉 弱勢壓制，建議觀望"
 
-            # 獲利與止損建議
-            take_profit = poc_price * 1.15
-            stop_loss = poc_price * 0.95
-
-            # --- C. 報告格式化 ---
+            # --- C. 報告內容 ---
             report = (
-                f"📊 **{tk} 策略診斷報告**\n"
+                f"📊 **{tk} 深度分析報告**\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"💰 **現價**：${latest_p:.2f} ({pct_chg:+.2f}%)\n"
-                f"📍 **籌碼重心 (POC)**：${poc_price:.2f}\n"
-                f"⚖️ **RSI 指標**：{cur_rsi:.1f} ({'超買' if cur_rsi>70 else '超賣' if cur_rsi<30 else '中性'})\n\n"
-                f"💡 **交易建議**：{signal_color} **{advice}**\n\n"
+                f"📍 **籌碼重心**：${poc_price:.2f}\n"
+                f"🔍 **主力行為**：{main_action}\n"
+                f"💡 **交易建議**：**{advice}**\n\n"
                 f"🎯 **操作參考**：\n"
-                f"   - 建議買入位：${poc_price:.2f} (支撐)\n"
-                f"   - 止損參考位：${stop_loss:.2f}\n"
-                f"   - 獲利目標位：${take_profit:.2f}\n"
+                f"   - 買入支撐位：${poc_price:.2f}\n"
+                f"   - 止損參考位：${poc_price * 0.95:.2f}\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
 
-            # --- D. 發送至 Telegram ---
+            # --- D. 雙子圖繪製與發送 ---
             if send_to_tg and telegram_token and chat_id:
-                # 繪圖
-                fig, ax = plt.subplots(figsize=(10, 6))
-                ax.plot(df.index[-100:], df['Close'].tail(100), label='Price', color='black')
-                ax.axhline(poc_price, color='red', ls='--', alpha=0.7, label='POC')
-                ax.fill_between(df.index[-100:], df['Upper'].tail(100), df['Lower'].tail(100), color='gray', alpha=0.2, label='BB Bands')
-                ax.set_title(f"{tk} Strategic Analysis")
-                ax.legend()
-
-                # 發送文字
-                requests.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", 
-                              data={"chat_id": chat_id, "text": report, "parse_mode": "Markdown"})
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), gridspec_kw={'height_ratios': [2, 1]})
                 
-                # 發送圖片
+                # 上圖：價格與布林帶
+                ax1.plot(df.index[-120:], df['Close'].tail(120), color='black', label='Price')
+                ax1.axhline(poc_price, color='red', ls='--', label=f'POC: {poc_price:.2f}')
+                ax1.fill_between(df.index[-120:], df['Upper'].tail(120), df['Lower'].tail(120), color='gray', alpha=0.2, label='BB Bands')
+                ax1.set_title(f"{tk} Trend & Cost Structure"); ax1.legend(loc='upper left')
+
+                # 下圖：累計資金流
+                ax2.fill_between(df.index[-120:], df['Cum_MF'].tail(120), color='purple', alpha=0.1)
+                ax2.plot(df.index[-120:], df['Cum_MF'].tail(120), color='purple', label='Cumulative Money Flow')
+                ax2.set_title("Money Flow Intelligence"); ax2.legend(loc='upper left')
+
+                plt.tight_layout()
+                
+                # 發送文字與圖片
+                requests.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", data={"chat_id": chat_id, "text": report, "parse_mode": "Markdown"})
                 buf = io.BytesIO(); fig.savefig(buf, format='png'); buf.seek(0)
-                requests.post(f"https://api.telegram.org/bot{telegram_token}/sendPhoto", 
-                              data={"chat_id": chat_id}, files={"photo": buf})
+                requests.post(f"https://api.telegram.org/bot{telegram_token}/sendPhoto", data={"chat_id": chat_id}, files={"photo": buf})
                 plt.close(fig)
-                print(f"✅ {tk} 診斷報告已送出")
+                print(f"✅ {tk} 深度報告已送出")
 
         except Exception as e:
             print(f"❌ {tk} 失敗: {e}")
