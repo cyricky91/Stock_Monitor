@@ -41,21 +41,26 @@ async def analyze_stock(ticker):
         if 'Close' not in df.columns or 'Volume' not in df.columns:
              return f"❌ {ticker} 數據欄位異常，請稍後再試。", None
 
-        # 2. 技術指標運算
-        # 計算籌碼重心 (POC)
+        # 2. 籌碼重心 (POC)
         prices, vols = df['Close'].values, df['Volume'].values
-        hist, bin_edges = np.histogram(prices, bins=BINS_COUNT, weights=vols)
+        hist, bin_edges = np.histogram(prices, bins=bins_count, weights=vols)
         poc_price = ((bin_edges[:-1] + bin_edges[1:]) / 2)[np.argmax(hist)]
 
-        # 計算 RSI (14日)
-        delta = df['Close'].diff()
+        # 累計資金流 (Cumulative Money Flow)
+        df['Price_Chg'] = df['Close'].diff()
+        df['MF'] = np.where(df['Price_Chg'] > 0, df['Volume'], np.where(df['Price_Chg'] < 0, -df['Volume'], 0))
+        df['Cum_MF'] = df['MF'].cumsum()
+
+        # RSI & 布林通道
+        delta = df['Price_Chg']
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-
-        # 計算累計資金流 (CMF)
-        df['MF'] = np.where(df['Close'].diff() > 0, df['Volume'], np.where(df['Close'].diff() < 0, -df['Volume'], 0))
-        df['Cum_MF'] = df['MF'].cumsum()
+            
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['STD'] = df['Close'].rolling(window=20).std()
+        df['Upper'] = df['MA20'] + (df['STD'] * 2)
+        df['Lower'] = df['MA20'] - (df['STD'] * 2)
 
         # 3. 提取數值 (確保提取的是純數值標量)
         latest_p = float(df['Close'].iloc[-1])
