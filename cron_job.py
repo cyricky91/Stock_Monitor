@@ -19,7 +19,7 @@ telegram_token = os.getenv("TELEGRAM_TOKEN")
 chat_id = os.getenv("CHAT_ID")
 
 # --- 在這裡修改你想定時收到的股票清單 ---
-stock_ids = "AAPL, NVDA, TSLA, MSFT, FORM, SKYQ, OGN"
+stock_ids = "OGN, SQFT, TLX, OKLO, MRLN, MP, VST, ACLS, IONQ, FIGR, RANI, SPIR"
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
