@@ -99,19 +99,11 @@ def run_diagnostic():
             if send_to_tg and telegram_token and chat_id:
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), gridspec_kw={'height_ratios': [2, 1]})
                 
-                # 上圖：股價、POC 與 布林通道
-                ax1.plot(plot_df.index, plot_df['Close'], color='#1f77b4', lw=2, label='Price')
-        
-                # 畫出布林通道 (BB Bands)
-                ax1.plot(plot_df.index, plot_df['Upper'], 'g--', alpha=0.3, label='BB Upper') # 綠色虛線
-                ax1.plot(plot_df.index, plot_df['Lower'], 'r--', alpha=0.3, label='BB Lower') # 紅色虛線
-                ax1.fill_between(plot_df.index, plot_df['Lower'], plot_df['Upper'], color='gray', alpha=0.1) # 填充通道
-        
-                # 畫出 POC 重心線
-                ax1.axhline(poc_price, color='orange', ls='-', alpha=0.8, lw=1.5, label=f'POC: {poc_price:.2f}')
-        
-                ax1.set_title(f"{ticker} Trend & BB Bands")
-                ax1.legend(loc='upper left', fontsize='small')
+                # 上圖：價格與布林帶
+                ax1.plot(df.indextk120:], df['Close'].tail(120), color='black', label='Price')
+                ax1.axhline(poc_price, color='red', ls='--', label=f'POC: {poc_price:.2f}')
+                ax1.fill_between(df.index[-120:], df['Upper'].tail(120), df['Lower'].tail(120), color='gray', alpha=0.2, label='BB Bands')
+                ax1.set_title(f"{tk} Trend & Cost Structure"); ax1.legend(loc='upper left')
 
                 # 下圖：累計資金流
                 ax2.fill_between(df.index[-120:], df['Cum_MF'].tail(120), color='purple', alpha=0.1)
