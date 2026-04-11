@@ -1,124 +1,126 @@
-import logging
-import re
-import io
 import os
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import requests
+import io
+import warnings
+import re
+from datetime import datetime
 
-# 建議將 Token 設定在 Railway 的 Variables 中，這裡改用環境變數讀取
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8786623670:AAHRQIvKKX6Gidc9pyqKgl3s17bI7ibk0tU")
+# 基礎環境設定
+warnings.filterwarnings("ignore")
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 
-# 分析參數
-BINS_COUNT = 80
-VOL_THRESHOLD = 2.0
+# 1. 讀取環境變數
+telegram_token = os.getenv("TELEGRAM_TOKEN")
+chat_id = os.getenv("CHAT_ID")
+send_to_tg = True
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# 2. 監控參數
+stock_ids = "AAPL, NVDA, TSLA, MSFT, FORM, SKYQ, OGN" 
+time_period = "1y"
+volume_spike_threshold = 2.0
+bins_count = 70
 
-async def analyze_stock(ticker):
-    try:
-        # 下載數據
-        df_raw = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
-        
-        if df_raw.empty or len(df_raw) < 35:
-            return f"❌ 無法獲取 {ticker} 的足夠數據", None
-
-        # 重要修正：處理 MultiIndex 結構，確保只抓取該 ticker 的數據
-        if isinstance(df_raw.columns, pd.MultiIndex):
-            df = pd.DataFrame({
-                'Close': df_raw['Close'][ticker],
-                'Volume': df_raw['Volume'][ticker]
-            }).dropna()
-        else:
-            df = df_raw[['Close', 'Volume']].dropna()
-
-        # 1. 籌碼重心 (POC)
-        prices, vols = df['Close'].values, df['Volume'].values
-        hist, bin_edges = np.histogram(prices, bins=BINS_COUNT, weights=vols)
-        poc_price = ((bin_edges[:-1] + bin_edges[1:]) / 2)[np.argmax(hist)]
-
-        # 2. RSI 指標
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-
-        # 3. 累計資金流 (CMF)
-        df['MF'] = np.where(df['Close'].diff() > 0, df['Volume'], np.where(df['Close'].diff() < 0, -df['Volume'], 0))
-        df['Cum_MF'] = df['MF'].cumsum()
-
-        # 數據提取 - 使用 .iloc[-1] 並轉型，確保是純數值
-        latest_p = float(df['Close'].iloc[-1])
-        prev_p = float(df['Close'].iloc[-2])
-        pct_chg = ((latest_p / prev_p) - 1) * 100
-        vol_ratio = float(df['Volume'].iloc[-1] / df['Volume'].tail(20).mean())
-        cur_rsi = float(df['RSI'].iloc[-1])
-        
-        # 市場與格式設定
-        is_hk = ".HK" in ticker
-        curr = "HK$ " if is_hk else "$ "
-        
-        # 策略邏輯
-        main_action = "🔥 主力放量進場" if vol_ratio >= VOL_THRESHOLD and pct_chg > 1.8 else \
-                      "😱 主力放量派發" if vol_ratio >= VOL_THRESHOLD and pct_chg < -1.8 else "🔘 籌碼縮量整理"
-        
-        advice = "📈 多頭結構，建議分批佈局" if latest_p > poc_price and cur_rsi < 68 else \
-                 "⚠️ 漲幅過快，暫不追高" if latest_p > poc_price else \
-                 "📉 弱勢壓制，建議觀望" if cur_rsi > 35 else "🔵 超跌區域，靜待反彈"
-
-        report = (
-            f"📊 **{ticker} 深度分析報告**\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"💰 **現價**：{curr}{latest_p:.2f} ({pct_chg:+.2f}%)\n"
-            f"📍 **籌碼重心**：{curr}{poc_price:.2f}\n"
-            f"🔍 **主力行為**：{main_action}\n"
-            f"💡 **交易建議**：{advice}\n\n"
-            f"🎯 **操作參考**：\n"
-            f"  - 買入支撐位：{curr}{poc_price:.2f}\n"
-            f"  - 止損參考位：{curr}{poc_price * 0.95:.2f}\n"
-            f"━━━━━━━━━━━━━━━━━━"
-        )
-
-        # 繪圖
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [2, 1]})
-        ax1.plot(df.index[-100:], df['Close'].tail(100), color='#1f77b4', lw=2)
-        ax1.axhline(poc_price, color='red', ls='--', alpha=0.7)
-        ax2.fill_between(df.index[-100:], df['Cum_MF'].tail(100), color='purple', alpha=0.1)
-        ax2.plot(df.index[-100:], df['Cum_MF'].tail(100), color='purple')
-        plt.tight_layout()
-        
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close(fig)
-        
-        return report, buf
-        except Exception as e:
-        return f"❌ 分析出錯: {str(e)}", None
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.upper().strip()
-    # 自動補全：純數字 -> 港股, 其他 -> 美股
-    tickers = [s.zfill(4)+".HK" if s.isdigit() else s for s in re.split(r'[，,；;\s]+', text)]
+def run_diagnostic():
+    tickers = [s.strip().upper() for s in re.split(r'[，,；;\s]+', stock_ids) if s.strip()]
+    print(f"⏰ 啟動終極診斷：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    for ticker in tickers:
-        msg = await update.message.reply_text(f"🔍 正在診斷 {ticker}...")
-        report, chart = await analyze_stock(ticker)
-        if chart:
-            await update.message.reply_photo(photo=chart, caption=report, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(report)
-        await msg.delete() # 刪除「正在診斷」的提示訊息
+    all_data = yf.download(tickers, period=time_period, interval="1d", progress=False, auto_adjust=True)
+    
+    for tk in tickers:
+        try:
+            if len(tickers) > 1:
+                df = pd.DataFrame({'Close': all_data['Close'][tk], 'Volume': all_data['Volume'][tk]}).dropna()
+            else:
+                df = pd.DataFrame({'Close': all_data['Close'], 'Volume': all_data['Volume']}).dropna()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 你好！直接傳送股票代號（例如：0005 或 NVDA），我會立刻為你分析籌碼分佈。")
+            if len(df) < 35: continue
 
-if __name__ == '__main__':
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🤖 即時診斷機器人已在 Railway 啟動...")
-    app.run_polling()
+            # --- A. 技術指標與資金流計算 ---
+            # 1. 籌碼重心 (POC)
+            prices, vols = df['Close'].values, df['Volume'].values
+            hist, bin_edges = np.histogram(prices, bins=bins_count, weights=vols)
+            poc_price = ((bin_edges[:-1] + bin_edges[1:]) / 2)[np.argmax(hist)]
+
+            # 2. 累計資金流 (Cumulative Money Flow)
+            df['Price_Chg'] = df['Close'].diff()
+            df['MF'] = np.where(df['Price_Chg'] > 0, df['Volume'], np.where(df['Price_Chg'] < 0, -df['Volume'], 0))
+            df['Cum_MF'] = df['MF'].cumsum()
+
+            # 3. RSI & 布林通道
+            delta = df['Price_Chg']
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+            
+            df['MA20'] = df['Close'].rolling(window=20).mean()
+            df['STD'] = df['Close'].rolling(window=20).std()
+            df['Upper'] = df['MA20'] + (df['STD'] * 2)
+            df['Lower'] = df['MA20'] - (df['STD'] * 2)
+
+            # --- B. 主力行為與策略判定 ---
+            latest_p = df['Close'].iloc[-1]
+            pct_chg = ((latest_p / df['Close'].iloc[-2]) - 1) * 100
+            vol_ratio = df['Volume'].iloc[-1] / df['Volume'].tail(20).mean()
+            cur_rsi = df['RSI'].iloc[-1]
+            
+            # 判定主力行為
+            main_action = "🔘 籌碼縮量整理"
+            if vol_ratio >= volume_spike_threshold:
+                if pct_chg > 1.8: main_action = "🔥 主力放量進場 (強烈看漲)"
+                elif pct_chg < -1.8: main_action = "😱 主力放量派發 (高度戒備)"
+            
+            # 策略建議
+            advice = "等待訊號"
+            if latest_p > poc_price:
+                advice = "✅ 多頭強勢，回調 POC 支撐可佈局" if cur_rsi < 70 else "⚠️ 超買警告，建議獲利了結"
+            else:
+                advice = "🔵 超跌機會，觀察反彈" if cur_rsi < 30 else "📉 弱勢壓制，建議觀望"
+
+            # --- C. 報告內容 ---
+            report = (
+                f"📊 **{tk} 深度分析報告**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💰 **現價**：${latest_p:.2f} ({pct_chg:+.2f}%)\n"
+                f"📍 **籌碼重心**：${poc_price:.2f}\n"
+                f"🔍 **主力行為**：{main_action}\n"
+                f"💡 **交易建議**：**{advice}**\n\n"
+                f"🎯 **操作參考**：\n"
+                f"   - 買入支撐位：${poc_price:.2f}\n"
+                f"   - 止損參考位：${poc_price * 0.95:.2f}\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            )
+
+            # --- D. 雙子圖繪製與發送 ---
+            if send_to_tg and telegram_token and chat_id:
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), gridspec_kw={'height_ratios': [2, 1]})
+                
+                # 上圖：價格與布林帶
+                ax1.plot(df.index[-120:], df['Close'].tail(120), color='black', label='Price')
+                ax1.axhline(poc_price, color='red', ls='--', label=f'POC: {poc_price:.2f}')
+                ax1.fill_between(df.index[-120:], df['Upper'].tail(120), df['Lower'].tail(120), color='gray', alpha=0.2, label='BB Bands')
+                ax1.set_title(f"{tk} Trend & Cost Structure"); ax1.legend(loc='upper left')
+
+                # 下圖：累計資金流
+                ax2.fill_between(df.index[-120:], df['Cum_MF'].tail(120), color='purple', alpha=0.1)
+                ax2.plot(df.index[-120:], df['Cum_MF'].tail(120), color='purple', label='Cumulative Money Flow')
+                ax2.set_title("Money Flow Intelligence"); ax2.legend(loc='upper left')
+
+                plt.tight_layout()
+                
+                # 發送文字與圖片
+                requests.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", data={"chat_id": chat_id, "text": report, "parse_mode": "Markdown"})
+                buf = io.BytesIO(); fig.savefig(buf, format='png'); buf.seek(0)
+                requests.post(f"https://api.telegram.org/bot{telegram_token}/sendPhoto", data={"chat_id": chat_id}, files={"photo": buf})
+                plt.close(fig)
+                print(f"✅ {tk} 深度報告已送出")
+
+        except Exception as e:
+            print(f"❌ {tk} 失敗: {e}")
+
+if __name__ == "__main__":
+    run_diagnostic()
