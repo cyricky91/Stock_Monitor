@@ -17,10 +17,9 @@ plt.rcParams['axes.unicode_minus'] = False
 # 1. 讀取環境變數
 telegram_token = os.getenv("TELEGRAM_TOKEN")
 chat_id = os.getenv("CHAT_ID")
-send_to_tg = True
+senddropna()
 
-# 2. 監控參數
-stock_ids = "OGN, SQFT, TLX, OKLO, MRLN, MP, VST, ACLS, IONQ, FIGR, PLTR, RANI" 
+            if lenck_ids = "AAPL, NVDA, TSLA, MSFT, FORM, SKYQ, OGN" 
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
@@ -100,7 +99,7 @@ def run_diagnostic():
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), gridspec_kw={'height_ratios': [2, 1]})
                 
                 # 上圖：價格與布林帶
-                ax1.plot(df.indextk120:], df['Close'].tail(120), color='black', label='Price')
+                ax1.plot(df.index[-120:], df['Close'].tail(120), color='black', label='Price')
                 ax1.axhline(poc_price, color='red', ls='--', label=f'POC: {poc_price:.2f}')
                 ax1.fill_between(df.index[-120:], df['Upper'].tail(120), df['Lower'].tail(120), color='gray', alpha=0.2, label='BB Bands')
                 ax1.set_title(f"{tk} Trend & Cost Structure"); ax1.legend(loc='upper left')
