@@ -20,10 +20,20 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 async def analyze_stock(ticker):
     try:
-        # 下載數據 (確保包含足夠計算 RSI 的天數)
-        df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
-        if df.empty or len(df) < 35:
+        # 下載數據
+        df_raw = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
+        
+        if df_raw.empty or len(df_raw) < 35:
             return f"❌ 無法獲取 {ticker} 的足夠數據", None
+
+        # 重要修正：處理 MultiIndex 結構，確保只抓取該 ticker 的數據
+        if isinstance(df_raw.columns, pd.MultiIndex):
+            df = pd.DataFrame({
+                'Close': df_raw['Close'][ticker],
+                'Volume': df_raw['Volume'][ticker]
+            }).dropna()
+        else:
+            df = df_raw[['Close', 'Volume']].dropna()
 
         # 1. 籌碼重心 (POC)
         prices, vols = df['Close'].values, df['Volume'].values
@@ -40,13 +50,14 @@ async def analyze_stock(ticker):
         df['MF'] = np.where(df['Close'].diff() > 0, df['Volume'], np.where(df['Close'].diff() < 0, -df['Volume'], 0))
         df['Cum_MF'] = df['MF'].cumsum()
 
-        # 數據提取
+        # 數據提取 - 使用 .iloc[-1] 並轉型，確保是純數值
         latest_p = float(df['Close'].iloc[-1])
-        pct_chg = ((latest_p / df['Close'].iloc[-2]) - 1) * 100
+        prev_p = float(df['Close'].iloc[-2])
+        pct_chg = ((latest_p / prev_p) - 1) * 100
         vol_ratio = float(df['Volume'].iloc[-1] / df['Volume'].tail(20).mean())
-        cur_rsi = df['RSI'].iloc[-1]
+        cur_rsi = float(df['RSI'].iloc[-1])
         
-        # 市場判定
+        # 市場與格式設定
         is_hk = ".HK" in ticker
         curr = "HK$ " if is_hk else "$ "
         
@@ -71,15 +82,12 @@ async def analyze_stock(ticker):
             f"━━━━━━━━━━━━━━━━━━"
         )
 
-        # 繪圖優化 (適合手機查看)
+        # 繪圖
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [2, 1]})
-        ax1.plot(df.index[-100:], df['Close'].tail(100), color='#1f77b4', lw=2, label='Price')
-        ax1.axhline(poc_price, color='red', ls='--', alpha=0.7, label=f'POC: {poc_price:.2f}')
-        ax1.set_title(f"{ticker} Analysis")
-        ax1.legend()
-        
+        ax1.plot(df.index[-100:], df['Close'].tail(100), color='#1f77b4', lw=2)
+        ax1.axhline(poc_price, color='red', ls='--', alpha=0.7)
         ax2.fill_between(df.index[-100:], df['Cum_MF'].tail(100), color='purple', alpha=0.1)
-        ax2.plot(df.index[-100:], df['Cum_MF'].tail(100), color='purple', label='Money Flow')
+        ax2.plot(df.index[-100:], df['Cum_MF'].tail(100), color='purple')
         plt.tight_layout()
         
         buf = io.BytesIO()
@@ -88,7 +96,7 @@ async def analyze_stock(ticker):
         plt.close(fig)
         
         return report, buf
-    except Exception as e:
+        except Exception as e:
         return f"❌ 分析出錯: {str(e)}", None
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
