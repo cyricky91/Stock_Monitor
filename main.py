@@ -43,7 +43,7 @@ async def analyze_stock(ticker):
 
         # 2. 籌碼重心 (POC)
         prices, vols = df['Close'].values, df['Volume'].values
-        hist, bin_edges = np.histogram(prices, bins=bins_count, weights=vols)
+        hist, bin_edges = np.histogram(prices, BINS_COUNT, weights=vols)
         poc_price = ((bin_edges[:-1] + bin_edges[1:]) / 2)[np.argmax(hist)]
 
         # 累計資金流 (Cumulative Money Flow)
