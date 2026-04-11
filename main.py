@@ -97,14 +97,25 @@ async def analyze_stock(ticker):
             f"━━━━━━━━━━━━━━━━━━"
         )
 
-        # 6. 視覺化繪圖 (優化手機顯示效果)
+        # 6. 視覺化繪圖 (加入布林通道顯示)
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), gridspec_kw={'height_ratios': [2, 1]})
         
-        # 上圖：股價與 POC
-        ax1.plot(df.index[-100:], df['Close'].tail(100), color='#1f77b4', lw=2, label='Price')
-        ax1.axhline(poc_price, color='red', ls='--', alpha=0.7, label=f'POC: {poc_price:.2f}')
-        ax1.set_title(f"{ticker} Trend Analysis")
-        ax1.legend(loc='upper left')
+        # 取得最後 100 筆數據用於顯示
+        plot_df = df.tail(100)
+        
+        # 上圖：股價、POC 與 布林通道
+        ax1.plot(plot_df.index, plot_df['Close'], color='#1f77b4', lw=2, label='Price')
+        
+        # 畫出布林通道 (BB Bands)
+        ax1.plot(plot_df.index, plot_df['Upper'], 'g--', alpha=0.3, label='BB Upper') # 綠色虛線
+        ax1.plot(plot_df.index, plot_df['Lower'], 'r--', alpha=0.3, label='BB Lower') # 紅色虛線
+        ax1.fill_between(plot_df.index, plot_df['Lower'], plot_df['Upper'], color='gray', alpha=0.1) # 填充通道
+        
+        # 畫出 POC 重心線
+        ax1.axhline(poc_price, color='orange', ls='-', alpha=0.8, lw=1.5, label=f'POC: {poc_price:.2f}')
+        
+        ax1.set_title(f"{ticker} Trend & BB Bands")
+        ax1.legend(loc='upper left', fontsize='small')
         
         # 下圖：資金流
         ax2.fill_between(df.index[-100:], df['Cum_MF'].tail(100), color='purple', alpha=0.1)
