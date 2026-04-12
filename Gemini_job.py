@@ -26,13 +26,15 @@ volume_spike_threshold = 2.0
 bins_count = 70
 
 def get_ai_comment(ticker, price, rsi, poc, action, advice):
-    """標準 HTTP 請求版本：不依賴 SDK，穩定解決 404 問題"""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return "AI 分析未啟用 (缺少 API Key)"
+    
+    # 關鍵：加上 .strip() 清除可能存在的空格或換行
+    api_key = api_key.strip() 
 
-    # 使用 v1 接口
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # ... 後續代碼不變
     
     headers = {'Content-Type': 'application/json'}
     
