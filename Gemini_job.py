@@ -19,7 +19,7 @@ telegram_token = os.getenv("TELEGRAM_TOKEN")
 chat_id = os.getenv("CHAT_ID")
 
 # --- 股票清單與參數 ---
-stock_ids = "OGN, SPIR"
+stock_ids = "OGN, SQFT, TLX, OKLO, MRLN, MP, VST, ACLS, IONQ, FIGR, RANI, SPIR"
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
