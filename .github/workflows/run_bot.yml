@@ -27,5 +27,5 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  # <--- 這裡一定要有，程式才讀得到
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}  # <--- 這裡一定要有，程式才讀得到
         run: python cron_job.py
