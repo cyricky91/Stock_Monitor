@@ -7,7 +7,6 @@ import requests
 import io
 import warnings
 import re
-import google.generativeai as genai
 from datetime import datetime
 
 # 基礎環境設定
@@ -15,47 +14,60 @@ warnings.filterwarnings("ignore")
 plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
-# 1. 讀取環境變數
+# 1. 讀取環境變數 (請在 GitHub Secrets 設定 DEEPSEEK_API_KEY)
 telegram_token = os.getenv("TELEGRAM_TOKEN")
 chat_id = os.getenv("CHAT_ID")
-gemini_key = os.getenv("GEMINI_API_KEY")
-
-# 2. 設定 Gemini
-if gemini_key:
-    genai.configure(api_key=gemini_key)
-    # 使用 flash 模型，速度快且對 GitHub Actions 負擔小
-    model = genai.GenerativeModel('gemini-1.5-flash')
+deepseek_key = os.getenv("DEEPSEEK_API_KEY")
 
 # --- 股票清單與參數 ---
-stock_ids = "OGN, SQFT, TLX, OKLO, MRLN, MP, VST, ACLS, IONQ, FIGR, RANI, SPIR"
+stock_ids = "OGN, SQFT, MRLN, FIGR, SPIR"
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
 
 def get_ai_comment(ticker, price, rsi, poc, action, advice):
-    """呼叫 Gemini 生成 AI 點評"""
-    if not gemini_key:
+    """呼叫 DeepSeek API 生成包含買賣點位建議的點評"""
+    if not deepseek_key:
         return "AI 分析未啟用 (缺少 API Key)"
     
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {deepseek_key}"
+    }
+    
+    # 在 Prompt 中明確要求買點範圍與止損位
     prompt = f"""
-    作為專業分析師，請針對以下股票數據提供 80 字內的極簡點評與風險提示：
-    股票：{ticker}
-    現價：${price:.2f}
-    RSI：{rsi:.1f}
-    籌碼重心 (POC)：${poc:.2f}
-    主力行為：{action}
-    技術建議：{advice}
+    作為資深量化分析師，針對股票 {ticker} 提供 100 字內點評：
+    數據：現價 ${price:.2f}, RSI {rsi:.1f}, 籌碼重心 ${poc:.2f}。
+    主力行為：{action}。技術建議：{advice}。
+    請務必包含：
+    1. 短期建議買入區間（參考 POC 與支撐）。
+    2. 嚴格止損價位（參考近期低點或 POC 下方）。
+    3. 結論與風險提示。
     請用繁體中文回答，直接給結論。
     """
+    
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "你是一位精通籌碼分佈與支撐壓力分析的專業交易員。"},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5  # 降低隨機性，讓點位建議更穩健
+    }
+    
     try:
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        result = response.json()
+        return result['choices'][0]['message']['content'].strip()
     except Exception as e:
-        return f"AI 暫時無法連線: {str(e)[:50]}"
+        return f"AI 暫時無法分析建議位: {str(e)[:50]}"
 
 def run_diagnostic():
     tickers = [s.strip().upper() for s in re.split(r'[，,；;\s]+', stock_ids) if s.strip()]
-    print(f"⏰ 啟動定時診斷：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"⏰ 啟動 DeepSeek 診斷系統：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     all_data = yf.download(tickers, period=time_period, interval="1d", progress=False, auto_adjust=True)
     
@@ -105,7 +117,7 @@ def run_diagnostic():
             else:
                 advice = "🔵 超跌區域，觀察反彈" if cur_rsi < 30 else "📉 弱勢壓制，建議觀望"
 
-            # --- C. 呼叫 AI 獲取點評 ---
+            # --- C. 呼叫 DeepSeek 獲取點評 ---
             ai_note = get_ai_comment(tk, latest_p, cur_rsi, poc_price, main_action, advice)
 
             # --- D. 報告內容 ---
@@ -116,7 +128,7 @@ def run_diagnostic():
                 f"📍 **籌碼重心**：${poc_price:.2f}\n"
                 f"🔍 **主力行為**：{main_action}\n"
                 f"💡 **交易建議**：**{advice}**\n\n"
-                f"🤖 **Gemini AI 點評**：\n{ai_note}\n"
+                f"🧠 **DeepSeek AI 點評**：\n{ai_note}\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
 
@@ -125,20 +137,17 @@ def run_diagnostic():
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), gridspec_kw={'height_ratios': [2, 1]})
                 plot_df = df.tail(120)
                 
-                # 上圖：價格與布林帶
                 ax1.plot(plot_df.index, plot_df['Close'], color='black', label='Price')
                 ax1.axhline(poc_price, color='red', ls='--', alpha=0.6, label=f'POC: {poc_price:.2f}')
                 ax1.fill_between(plot_df.index, plot_df['Upper'], plot_df['Lower'], color='gray', alpha=0.15, label='BB Bands')
                 ax1.set_title(f"{tk} Trend Analysis"); ax1.legend(loc='upper left')
 
-                # 下圖：資金流
                 ax2.fill_between(plot_df.index, plot_df['Cum_MF'], color='purple', alpha=0.1)
                 ax2.plot(plot_df.index, plot_df['Cum_MF'], color='purple', label='Money Flow Strength')
                 ax2.legend(loc='upper left')
 
                 plt.tight_layout()
                 
-                # 發送訊息
                 requests.post(f"https://api.telegram.org/bot{telegram_token}/sendMessage", 
                              data={"chat_id": chat_id, "text": report, "parse_mode": "Markdown"})
                 
