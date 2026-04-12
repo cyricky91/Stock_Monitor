@@ -17,35 +17,35 @@ plt.rcParams['axes.unicode_minus'] = False
 # 1. 讀取環境變數
 telegram_token = os.getenv("TELEGRAM_TOKEN")
 chat_id = os.getenv("CHAT_ID")
-# gemini_key 會在 get_ai_comment 函數中被調用，不需額外初始化
 
 # --- 股票清單與參數 ---
-stock_ids = "OGN, SQFT"
+stock_ids = "OGN, SPIR"
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
 
 def get_ai_comment(ticker, price, rsi, poc, action, advice):
+    """標準 HTTP 請求版本：使用 v1 穩定接口並清理 Key 格式"""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         return "AI 分析未啟用 (缺少 API Key)"
     
-    # 關鍵：加上 .strip() 清除可能存在的空格或換行
-    api_key = api_key.strip() 
+    # 關鍵：移除 API Key 前後可能存在的換行符或空格
+    api_key = api_key.strip()
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-    # ... 後續代碼不變
+    # 使用 v1 穩定版接口與 flash 模型 (若 flash 持續 404，可手動改為 pro 測試)
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     headers = {'Content-Type': 'application/json'}
     
     prompt = f"""
-    作為資深量化分析師，針對股票 {ticker} 提供 100 字內繁體中文點評：
-    數據：現價 ${price:.2f}, RSI {rsi:.1f}, 籌碼重心 ${poc:.2f}。
+    作為專業資深分析師，針對股票 {ticker} 提供 100 字內繁體中文點評：
+    數據：現價 ${price:.2f}, RSI {rsi:.1f}, 籌碼重心 (POC) ${poc:.2f}。
     主力行為：{action}。技術建議：{advice}。
     請務必包含：
-    1. 短期建議買入區間（參考 POC）。
+    1. 短期具體建議買入區間（參考 POC 與現價）。
     2. 嚴格止損價位。
-    直接給結論。
+    直接給出結論，不需前言。
     """
     
     payload = {
@@ -60,8 +60,15 @@ def get_ai_comment(ticker, price, rsi, poc, action, advice):
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
+        
+        # 增加詳細錯誤判定
+        if response.status_code == 404:
+            return "Gemini 診斷失敗: 404 (模型路徑或 API Key 權限問題)"
+        
         response.raise_for_status()
         result = response.json()
+        
+        # 解析回傳內容
         return result['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
         return f"Gemini 診斷失敗: {str(e)[:50]}"
@@ -74,6 +81,7 @@ def run_diagnostic():
     
     for tk in tickers:
         try:
+            # 數據結構處理
             if len(tickers) > 1:
                 df = pd.DataFrame({'Close': all_data['Close'][tk], 'Volume': all_data['Volume'][tk]}).dropna()
             else:
@@ -81,6 +89,7 @@ def run_diagnostic():
 
             if len(df) < 35: continue
 
+            # --- A. 技術指標計算 ---
             prices, vols = df['Close'].values, df['Volume'].values
             hist, bin_edges = np.histogram(prices, bins=bins_count, weights=vols)
             poc_price = ((bin_edges[:-1] + bin_edges[1:]) / 2)[np.argmax(hist)]
@@ -99,6 +108,7 @@ def run_diagnostic():
             df['Upper'] = df['MA20'] + (df['STD'] * 2)
             df['Lower'] = df['MA20'] - (df['STD'] * 2)
 
+            # --- B. 策略判定 ---
             latest_p = float(df['Close'].iloc[-1])
             pct_chg = ((latest_p / df['Close'].iloc[-2]) - 1) * 100
             vol_ratio = float(df['Volume'].iloc[-1] / df['Volume'].tail(20).mean())
@@ -115,8 +125,10 @@ def run_diagnostic():
             else:
                 advice = "🔵 超跌區域，觀察反彈" if cur_rsi < 30 else "📉 弱勢壓制，建議觀望"
 
+            # --- C. 呼叫 AI 獲取點評 ---
             ai_note = get_ai_comment(tk, latest_p, cur_rsi, poc_price, main_action, advice)
 
+            # --- D. 報告內容 ---
             report = (
                 f"📊 **{tk} 定時診斷報告**\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
@@ -124,10 +136,11 @@ def run_diagnostic():
                 f"📍 **籌碼重心**：${poc_price:.2f}\n"
                 f"🔍 **主力行為**：{main_action}\n"
                 f"💡 **交易建議**：**{advice}**\n\n"
-                f"🤖 **Gemini AI 點評**：\n{ai_note}\n"
+                f"🧠 **Gemini AI 點評**：\n{ai_note}\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
 
+            # --- E. 繪圖與發送 ---
             if telegram_token and chat_id:
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 8), gridspec_kw={'height_ratios': [2, 1]})
                 plot_df = df.tail(120)
