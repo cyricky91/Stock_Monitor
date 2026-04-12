@@ -32,7 +32,7 @@ def get_ai_comment(ticker, price, rsi, poc, action, advice):
         return "AI 分析未啟用 (缺少 API Key)"
 
     # 使用 v1beta 接口
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     
     headers = {'Content-Type': 'application/json'}
     
