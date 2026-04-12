@@ -20,7 +20,7 @@ chat_id = os.getenv("CHAT_ID")
 deepseek_key = os.getenv("DEEPSEEK_API_KEY")
 
 # --- 股票清單與參數 ---
-stock_ids = "OGN, SQFT, MRLN, FIGR, SPIR"
+stock_ids = "1138, 1788, 3625, 3317"
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
