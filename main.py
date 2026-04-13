@@ -1,7 +1,8 @@
 import logging
 import re
 import io
-impocurr}{resist requests
+import os
+import requests
 import yfinance as yf
 import pandas as pd
 import numpy as np
