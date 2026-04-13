@@ -20,7 +20,7 @@ chat_id = os.getenv("CHAT_ID")
 deepseek_key = os.getenv("DEEPSEEK_API_KEY")
 
 # --- 股票清單與參數 ---
-stock_ids = "0005.HK, 1138.HK, 2259.HK, 6613.HK, 9988.HK, 2718.HK, 1788.HK, 3625.HK, 3317.HK, 0100.HK"
+stock_ids = "OGN, SQFT, TLX, MRLN, ACLS, SPIR""
 time_period = "1y"
 volume_spike_threshold = 2.0
 bins_count = 70
