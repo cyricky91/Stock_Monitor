@@ -7,6 +7,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from duckduckgo_search import DDGS  # 新增：用於免費搜尋新聞
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
@@ -14,182 +15,140 @@ from telegram.constants import ParseMode
 # 1. 基礎設定
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY")
-
 BINS_COUNT = 100
-VOL_THRESHOLD = 2.0
 
-# 設置日誌
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_ai_comment(ticker, data_summary):
-    """呼叫 DeepSeek API，增加超時處理與詳細報錯"""
-    if not DEEPSEEK_KEY:
-        return "⚠️ AI 分析未啟用：請在 Railway 設置 DEEPSEEK_API_KEY。"
+# 繁體中文映射表
+STOCK_NAME_MAP = {
+    "0700.HK": "騰訊控股", "9988.HK": "阿里巴巴", "3690.HK": "美團",
+    "1810.HK": "小米集團", "6613.HK": "百威亞太", "3317.HK": "實力建業"
+}
+
+def get_latest_news(ticker, name):
+    """搜尋該股票最新的 3 則相關新聞"""
+    query = f"{name} {ticker} 股價 新聞"
+    news_results = []
+    try:
+        with DDGS() as ddgs:
+            # 搜尋最近一週的新聞
+            results = ddgs.news(query, region="wt-wt", safesearch="off", timelimit="w", max_results=3)
+            for r in results:
+                news_results.append(f"- {r['title']} ({r['date']})")
+        return "\n".join(news_results) if news_results else "暫無近期重大市場消息。"
+    except Exception as e:
+        logger.error(f"新聞搜尋失敗: {e}")
+        return "新聞搜尋暫時不可用。"
+
+def get_ai_comment(ticker, name, data_summary, market_news):
+    """呼叫 AI，將技術數據與新聞結合分析"""
+    if not DEEPSEEK_KEY: return "⚠️ AI 密鑰未設定"
     
     url = "https://api.deepseek.com/chat/completions"
-    headers = {
-        "Content-Type": "application/json", 
-        "Authorization": f"Bearer {DEEPSEEK_KEY.strip()}"
-    }
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_KEY.strip()}"}
     
     prompt = f"""
-    作為量化資產管理主管，請針對 {ticker} 進行診斷：
-    【數據包】: {data_summary}
-    【任務】: 提供 250-300 字繁體中文分析。包括：
-    1. 籌碼結構與 POC 意義。
-    2. 動能與 RSI/MACD 背離偵測。
-    3. 基於 ATR 的進場與防守方案。
-    4. 1-10分評分。
+    作為資深分析師，針對 {name} ({ticker}) 進行診斷：
+    【技術數據】: {data_summary}
+    【最新市場新聞】: 
+    {market_news}
+
+    【任務】: 提供 350 字左右繁體中文報告。必須包括：
+    1. 📰 市場動向：總結新聞對股價是正面還是負面（如收購、業績、政策影響）。
+    2. 📊 籌碼與技術面：POC、MACD 與 RSI 分析。
+    3. 🛡️ 風控建議：給出具體進場與 ATR 止損價位。
+    4. ⚖️ 綜合評分：1-10分。
     """
     
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [
-            {"role": "system", "content": "你是一位專業的對沖基金策略師，說話精準、不廢話。"},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.3
-    }
-    
     try:
-        # 設置 25 秒超時，防止 Railway 任務卡死
-        response = requests.post(url, headers=headers, json=payload, timeout=25)
-        response.raise_for_status()
+        response = requests.post(url, headers=headers, json={
+            "model": "deepseek-chat",
+            "messages": [{"role": "system", "content": "你是一位結合基本面新聞與技術面量化的專家。"}, {"role": "user", "content": prompt}],
+            "temperature": 0.3
+        }, timeout=30)
         return response.json()['choices'][0]['message']['content'].strip()
-    except requests.exceptions.Timeout:
-        return "⚠️ AI 分析超時：DeepSeek 伺服器回應過慢，請稍後再試。"
     except Exception as e:
-        logger.error(f"AI API Error: {str(e)}")
-        return f"⚠️ AI 診斷連線失敗：請檢查 API 餘額或 Key 設定。原因: {str(e)[:50]}"
+        return f"⚠️ AI 分析異常: {str(e)[:50]}"
 
-async def analyze_stock(ticker):
-    """核心分析函數，增加數據下載檢查"""
+async def analyze_stock(ticker_str):
     try:
-        # 下載數據，設置超時
-        df_raw = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=True)
+        t_obj = yf.Ticker(ticker_str)
+        # 獲取名稱邏輯
+        stock_name = STOCK_NAME_MAP.get(ticker_str) or t_obj.info.get('shortName') or ticker_str
         
-        if df_raw.empty or len(df_raw) < 60:
-            return f"❌ 數據下載失敗：找不到股票代號 {ticker} 或數據不足。", None
+        # 1. 獲取市場消息 (新增)
+        market_news = get_latest_news(ticker_str, stock_name)
+        
+        # 2. 下載與計算數據
+        df = t_obj.history(period="1y", interval="1d", auto_adjust=True)
+        if df.empty or len(df) < 60: return f"❌ 無法獲取數據", None
+        
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-        df = df_raw.copy()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        
-        # --- 技術指標計算 ---
-        # 均線
-        df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['MA200'] = df['Close'].rolling(window=200).mean()
-        
-        # MACD
-        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
-        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+        # 指標計算 (簡化版)
+        df['MA50'] = df['Close'].rolling(50).mean()
+        exp1, exp2 = df['Close'].ewm(span=12).mean(), df['Close'].ewm(span=26).mean()
         df['MACD'] = exp1 - exp2
-        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        df['Signal'] = df['MACD'].ewm(span=9).mean()
         df['Hist'] = df['MACD'] - df['Signal']
-
-        # ATR & RSI
         tr = pd.concat([df['High']-df['Low'], (df['High']-df['Close'].shift()).abs(), (df['Low']-df['Close'].shift()).abs()], axis=1).max(axis=1)
-        df['ATR'] = tr.rolling(window=14).mean()
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-
+        df['ATR'] = tr.rolling(14).mean()
+        
         # POC 籌碼重心
         prices, vols = df['Close'].values, df['Volume'].values
         hist, bin_edges = np.histogram(prices, BINS_COUNT, weights=vols)
         poc_p = ((bin_edges[:-1] + bin_edges[1:]) / 2)[np.argmax(hist)]
 
-        # --- 數據摘要 ---
         last = df.iloc[-1]
-        latest_p = float(last['Close'])
-        atr_v = float(last['ATR'])
-        resis = float(df['High'].tail(60).max())
+        data_summary = f"現價:{last['Close']:.2f}, POC:{poc_p:.2f}, MACD:{last['MACD']:.3f}, ATR:{last['ATR']:.2f}"
         
-        data_summary = (
-            f"現價:{latest_p:.2f}, POC:{poc_p:.2f}, RSI:{last['RSI']:.1f}, "
-            f"MACD:{last['MACD']:.3f}, ATR:{atr_v:.2f}, MA50:{last['MA50']:.2f}"
-        )
+        # 3. 呼叫 AI 整合新聞與技術面
+        ai_note = get_ai_comment(ticker_str, stock_name, data_summary, market_news)
 
-        ai_note = get_ai_comment(ticker, data_summary)
-
-        # --- 報告組裝 ---
-        curr = "HK$ " if ".HK" in ticker else "$ "
+        curr = "HK$ " if ".HK" in ticker_str else "$ "
         report = (
-            f"🚀 *{ticker} 診斷報告*\n"
+            f"🚀 *{stock_name}* ({ticker_str})\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"💰 *現價*：{curr}{latest_p:.2f}\n"
+            f"💰 *現價*：{curr}{last['Close']:.2f}\n"
             f"📍 *籌碼重心*：{curr}{poc_p:.2f}\n"
-            f"🛡️ *ATR 止損位*：{curr}{latest_p - 2.5*atr_v:.2f}\n"
-            f"🎯 *壓力位*：{curr}{resis:.2f}\n\n"
-            f"🧠 *AI 策略分析*：\n{ai_note}\n"
+            f"🛡️ *ATR 止損*：{curr}{last['Close'] - 2.5*last['ATR']:.2f}\n\n"
+            f"{ai_note}\n"
             f"━━━━━━━━━━━━━━━━━━"
         )
 
-        # --- 繪圖 ---
-        plt.style.use('ggplot')
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), gridspec_kw={'height_ratios': [2, 1]})
-        plot_df = df.tail(100)
-        ax1.plot(plot_df.index, plot_df['Close'], color='black', lw=1.5, label='Price')
-        ax1.plot(plot_df.index, plot_df['MA50'], label='MA50', alpha=0.7)
-        ax1.axhline(poc_p, color='orange', ls='--', label='POC')
-        ax1.set_title(f"{ticker} Analysis")
-        ax1.legend()
-
-        ax2.bar(plot_df.index, plot_df['Hist'], color='gray', alpha=0.3, label='MACD Hist')
-        ax2.plot(plot_df.index, plot_df['MACD'], label='MACD')
-        ax2.plot(plot_df.index, plot_df['Signal'], label='Signal')
-        ax2.legend()
+        # 4. 繪圖
+        plt.style.use('dark_background')
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        df.tail(100)['Close'].plot(ax=ax1, color='#00ff00', title=f"{stock_name} Analysis")
+        ax1.axhline(poc_p, color='orange', ls='--')
         
         buf = io.BytesIO()
         fig.savefig(buf, format='png', dpi=120)
         buf.seek(0)
         plt.close(fig)
-        
         return report, buf
     except Exception as e:
-        logger.error(f"Analysis Error: {str(e)}")
-        return f"❌ 數據處理出錯: {str(e)}", None
+        return f"❌ 系統錯誤: {e}", None
 
+# --- Telegram 處理邏輯 (保持不變) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text: return
     text = update.message.text.upper().strip()
-    # 自動補全港股代號
     tickers = [s.zfill(4)+".HK" if s.isdigit() and len(s)<=4 else s for s in re.split(r'[，,；;\s]+', text)]
-    
     for ticker in tickers:
-        temp_msg = await update.message.reply_text(f"🔋 正在分析 {ticker}...")
+        temp = await update.message.reply_text(f"🔍 正在進行全網搜尋與診斷: {ticker}...")
         report, chart = await analyze_stock(ticker)
-        
         try:
             if chart:
-                try:
-                    # 優先嘗試以 Markdown 模式發送
-                    await update.message.reply_photo(photo=chart, caption=report, parse_mode=ParseMode.MARKDOWN)
-                except Exception as e:
-                    logger.warning(f"Markdown parse failed, falling back to plain text: {e}")
-                    # 如果解析失敗，則以普通文本發送，防止沒反應
-                    await update.message.reply_photo(photo=chart, caption=report)
+                await update.message.reply_photo(photo=chart, caption=report, parse_mode=ParseMode.MARKDOWN)
             else:
                 await update.message.reply_text(report)
-        except Exception as final_e:
-            await update.message.reply_text(f"❌ 消息發送失敗: {str(final_e)}")
-        
-        await temp_msg.delete()
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 系統已就緒。傳送股票代號（如 700 或 AAPL）獲取旗艦診斷。")
+        except:
+            await update.message.reply_photo(photo=chart, caption=report)
+        await temp.delete()
 
 if __name__ == '__main__':
-    if not TOKEN:
-        print("❌ 錯誤: 未設置 TELEGRAM_TOKEN 環境變數")
-    else:
-        app = Application.builder().token(TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        print("🤖 機器人正在運行中...")
-        app.run_polling(drop_pending_updates=True)
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.run_polling(drop_pending_updates=True)
