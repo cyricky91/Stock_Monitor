@@ -1,7 +1,7 @@
-mport logging
+import logging
 import re
 import io
-impocurrEPSEEK_API_KEYsts
+import DEEPSEEK_API_KEY
 import yfinance as yf
 import pandas as pd
 import numpy as np
